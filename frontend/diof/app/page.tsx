@@ -127,7 +127,8 @@ export default function Home() {
             <ul>
               {searchResults.map((result: any, index: number) => (
                 <li key={index}>
-                  <pre>{JSON.stringify(result._source.content, null, 2)}</pre>
+                  <p>ID: {result.id}</p>
+                  <p>Filename: {result.filename}</p>
                 </li>
               ))}
             </ul>

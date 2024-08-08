@@ -8,6 +8,7 @@ import mime from 'mime-types';
 import path from 'path';
 require('dotenv').config();
 const cors = require('cors');
+const { Client } = require('@elastic/elasticsearch');
 
 const app = express();
 const port = 3000;
@@ -35,15 +36,47 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage: storage });
 
-// Configuração do cliente Elasticsearch
-const elasticsearchClient = axios.create({
-    baseURL: 'https://localhost:9200', // Adjust URL as needed
-    headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`        
+
+// Configuração do cliente Elasticsearch com Elasticsearch Node.js client
+const client = new Client({
+    node: 'https://localhost:9200',
+    auth: {
+        username: username,
+        password: password,
     },
-    httpsAgent: new https.Agent({ rejectUnauthorized: false }) as any
-});
+    tls: {
+        ca: fs.readFileSync( "./certs/ca.crt" ),
+        rejectUnauthorized: false
+    }
+})
+
+
+// Criar o pipeline de ingestão
+async function createIngestPipeline() {
+    try {
+        await client.ingest.putPipeline({
+            id: 'attachment',
+            body: {
+                description: 'Extract attachment information',
+                processors: [
+                    {
+                        attachment: {
+                            field: 'data',
+                            remove_binary: true, // Definindo explicitamente o valor de remove_binary
+                        },
+                    },
+                ],
+            },
+        });
+        console.log('Pipeline created successfully');
+    } catch (error) {
+        console.error('Error creating pipeline:', error);
+    }
+}
+
+createIngestPipeline();
+
+
 
 
 // Rota para upload de arquivos
@@ -56,7 +89,7 @@ app.post('/upload', upload.single('file'), async (req: Request, res: Response) =
         const filePath = req.file.path;        
         const data = await readFileBase64(filePath);
         const indexName = 'diof'; // Nome do índice no Elasticsearch
-        const documentId = await indexData(data, indexName);        
+        const documentId = await indexData(req.file.filename, data, indexName);        
         res.status(200).json({ message: 'File uploaded and indexed successfully', documentId });
 
     } catch (error) {
@@ -66,19 +99,19 @@ app.post('/upload', upload.single('file'), async (req: Request, res: Response) =
 });
 
 // Rota para Recuperação de Arquivos por ID
-app.get('/file/:id', async (req: Request, res: Response) => {
-    try {
-        const fileId = req.params.id;        
-        const indexName = 'diof'; 
-        const fileData = await getFileData(fileId, indexName);        
-        const filePath = path.join(__dirname, `${fileId}.txt`);
-        fs.writeFileSync(filePath, fileData);            
-        res.status(200).json({ message: `File data exported to ${fileId}.txt` });
-    } catch (error) {
-        console.error('Erro ao recuperar arquivo:', error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
+// app.get('/file/:id', async (req: Request, res: Response) => {
+//     try {
+//         const fileId = req.params.id;        
+//         const indexName = 'diof'; 
+//         const fileData = await getFileData(fileId, indexName);        
+//         const filePath = path.join(__dirname, `${fileId}.txt`);
+//         fs.writeFileSync(filePath, fileData);            
+//         res.status(200).json({ message: `File data exported to ${fileId}.txt` });
+//     } catch (error) {
+//         console.error('Erro ao recuperar arquivo:', error);
+//         res.status(500).json({ error: 'Internal server error' });
+//     }
+// });
 
 // Rota para pesquisar pela query
 app.get('/search', async (req: Request, res: Response) => {
@@ -106,32 +139,19 @@ app.get('/search', async (req: Request, res: Response) => {
 // ------------------------------------ Funções Auxiliares ---------------------------
 
 // Função que recupera os dados do arquivo do Elasticsearch pelo ID
-async function getFileData(fileId: string, indexName: string): Promise<string> {
-    try {
-        const url = `/${indexName}/_doc/${fileId}`;
-        const response = await elasticsearchClient.get(url);
-        console.log(response.data._source.content.slice(0, 50))
-        return response.data._source.content; // Assuming 'content' field stores base64-encoded file content
-    } catch (error: any) {
-        console.error('Error retrieving file data:', error.response?.status, error.response?.data);                
-        throw error;
-    }
-}
+// async function getFileData(fileId: string, indexName: string): Promise<string> {
+//     try {
+//         const url = `/${indexName}/_doc/${fileId}`;
+//         const response = await elasticsearchClient.get(url);
+//         console.log(response.data._source.content.slice(0, 50))
+//         return response.data._source.content; // Assuming 'content' field stores base64-encoded file content
+//     } catch (error: any) {
+//         console.error('Error retrieving file data:', error.response?.status, error.response?.data);                
+//         throw error;
+//     }
+// }
 
 
-
-// Function to read file data
-async function readFile(filePath: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-        fs.readFile(filePath, 'utf8', (err, data) => {
-            if (err) {
-                reject(err);
-            } else {
-                resolve(data);
-            }
-        });
-    });
-}
 
 // Função para ler o arquivo e converter para base64
 async function readFileBase64(filePath: string): Promise<string> {
@@ -139,11 +159,12 @@ async function readFileBase64(filePath: string): Promise<string> {
         fs.readFile(filePath, (err, data) => {
             if (err) {
                 reject(err);
-            } else {                
-                  const mimeType = mime.lookup(filePath) || 'application/octet-stream';
-                  // Construct data URI with MIME type and base64-encoded data
-                  const dataUri = `data:${mimeType};base64,${Buffer.from(data).toString('base64')}`;
-                  resolve(dataUri);
+            } else {
+                resolve(data.toString('base64'));               
+                //   const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+                //   // Construct data URI with MIME type and base64-encoded data
+                //   const dataUri = `data:${mimeType};base64,${Buffer.from(data).toString('base64')}`;
+                //   resolve(dataUri);
             }
         });
     });
@@ -151,21 +172,25 @@ async function readFileBase64(filePath: string): Promise<string> {
 
 
 // Função para Indexar os dados do arquivo no Elasticsearch e retornar o ID do documento
-async function indexData(data: string, indexName: string): Promise<void> {
+async function indexData(filename: string, data: string, indexName: string): Promise<string> {
     try {
-        const url = `/${indexName}/_doc`; // Adjust index name as needed
-        const payload = { content: data }; // Assuming 'content' field is used to store base64 encoded file
-        const response = await elasticsearchClient.post(url, payload);
-        //await elasticsearchClient.post(url, data);
-        const documentId = response.data._id; // Extract document ID from the response
-        console.log('Data indexed successfully with ID:', documentId);
-        console.log('Data indexed successfully');
-        return documentId;        
+        
+        const response = await client.index({
+            index: indexName,
+            pipeline: 'attachment',
+            body: {
+                filename: filename, // Adiciona o nome do arquivo ao documento
+                data: data,
+            },
+          });
+        
+          console.log("response from elasticsearch: ", response);
+            return response._id;       
     } catch (error: any) {
-        if (error.response) {
-            console.error('Error indexing data:',  (error.response as any).status, (error.response as any).data);
+        if (error.meta && error.meta.body) {
+            console.error('Error indexing data:',  error.meta.body.error);
         } else {
-            console.error('Error indexing data:', (error as Error).message);
+            console.error('Error indexing data:', error);
 
         }
         throw error;
@@ -175,19 +200,47 @@ async function indexData(data: string, indexName: string): Promise<void> {
 // Função para pesquisar pela query no Elasticsearch
 async function findByQuery(query: string, indexName: string) {
     try{
-        console.log('to aqui no find');
-        const url = `/${indexName}/_search`;
-        const payload = {
-            query: {
-              match: {
-                content: query
-              }
-            }
-        };
-    
-        const response = await elasticsearchClient.post(url, payload);
-        console.log('response find: ', response.data);
-        return response.data.hits.hits;
+
+        console.log('query: ', query);
+        const result = await client.search({
+            index: indexName,
+
+                query: {
+                  match: { "attachment.content": query },
+                },
+                size: 10
+
+          })
+
+        
+          // Exibir todos os hits encontrados
+        // const hits = result.hits.hits;
+        // hits.forEach((hit: 
+        //                 { 
+        //                     _id: any; 
+        //                     _source: {
+        //                         filename: any; 
+        //                         attachment: { content: any; }; 
+        //                     }; 
+        //                 }) => {
+        //     console.log(`Document ID: ${hit._id}`);
+        //     console.log(`Document name: ${hit._source.filename}`);
+        //     // console.log(`Attachment Content: ${hit._source.attachment.content}`);
+        // });
+
+        
+
+        // Extrair apenas os IDs e nomes de arquivos dos hits
+        const hits = result.hits.hits.map((hit: 
+                { 
+                    _id: any; 
+                    _source: { filename: any; }; 
+                }) => ({
+            id: hit._id,
+            filename: hit._source.filename
+        }));
+
+        return hits;
 
     } catch (error: any) {
         if (error.response) {
