@@ -78,6 +78,24 @@ createIngestPipeline();
 
 
 
+// Rota para criar o índice
+app.get('/createIndex', async (req: Request, res: Response) => {
+    const indexName = req.query.indexName as string;
+
+    try{
+        await createIndexWithAnalyzer(indexName);
+        console.log(`Index ${indexName} created with custom analyzer.`);
+        res.status(200).json({ message: 'Índice criado com sucesso' });
+
+    } catch (error) {
+        console.log('Erro ao criar índice: ', error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+
+})
+
+
+
 
 // Rota para upload de arquivos
 app.post('/upload', upload.single('file'), async (req: Request, res: Response) => {
@@ -152,6 +170,53 @@ app.get('/search', async (req: Request, res: Response) => {
 // }
 
 
+// Função para criar índice com analyzer stop words
+async function createIndexWithAnalyzer(indexName: string) {
+    await client.indices.create({
+        index: indexName,
+        body: {
+            settings: {
+                analysis: {
+                    filter: {
+                        portuguese_stop: {
+                            type: "stop",
+                            stopwords: "_brazilian_" // ou "_portuguese_"
+                        }
+                    },
+                    analyzer: {
+                        custom_portuguese_analyzer: {
+                            type: "custom",
+                            tokenizer: "standard",
+                            filter: ["lowercase", "portuguese_stop"]
+                        }
+                    }
+                }
+            },
+            mappings: {
+                properties: {
+                    attachment: {
+                        type: "object",
+                        properties: {
+                            content: {
+                                type: "text",
+                                analyzer: "custom_portuguese_analyzer"
+                            },
+                            filename: {
+                                type: "keyword"
+                            }
+                        }
+                    },
+                    data: {
+                        type: "binary"
+                    }
+                }
+            }
+        }
+    });
+    console.log(`Índice ${indexName} criado com custom analyzer.`);
+}
+
+
 
 // Função para ler o arquivo e converter para base64
 async function readFileBase64(filePath: string): Promise<string> {
@@ -198,6 +263,11 @@ async function indexData(filename: string, data: string, indexName: string): Pro
 }
 
 // Função para pesquisar pela query no Elasticsearch
+
+// match: permite encontrar documentos onde as palavras da query estão presentes, mas não necessariamente na mesma ordem ou juntas.
+// match_phrase: exige que as palavras da query apareçam exatamente na ordem e juntas no texto.
+// Boosting Relevance: Se você quiser dar mais relevância a documentos onde as palavras estão juntas, mas ainda permitir que resultados com as palavras separadas apareçam, você pode usar uma combinação de match e match_phrase com uma consulta bool e configurar os boost
+
 async function findByQuery(query: string, indexName: string) {
     try{
 
@@ -205,30 +275,33 @@ async function findByQuery(query: string, indexName: string) {
         const result = await client.search({
             index: indexName,
 
-                query: {
-                  match: { "attachment.content": query },
-                },
-                size: 10
+            query: {
+                bool: {
+                    should: [
+                        {
+                            match_phrase: {
+                                "attachment.content": query
+                            }
+                        },
+                        {
+                            match: {
+                                "attachment.content": {
+                                    query: query,
+                                    operator: "and",
+                                    boost: 0.5
+                                }
+                            }
+                        }
+                    ]
+                }
+            },
+            size: 10
 
-          })
+        })
 
-        
-          // Exibir todos os hits encontrados
-        // const hits = result.hits.hits;
-        // hits.forEach((hit: 
-        //                 { 
-        //                     _id: any; 
-        //                     _source: {
-        //                         filename: any; 
-        //                         attachment: { content: any; }; 
-        //                     }; 
-        //                 }) => {
-        //     console.log(`Document ID: ${hit._id}`);
-        //     console.log(`Document name: ${hit._source.filename}`);
-        //     // console.log(`Attachment Content: ${hit._source.attachment.content}`);
-        // });
-
-        
+        if (result.hits.hits.length === 0) {
+            return { message: "Nenhum resultado encontrado." };
+        }
 
         // Extrair apenas os IDs e nomes de arquivos dos hits
         const hits = result.hits.hits.map((hit: 

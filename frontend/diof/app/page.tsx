@@ -7,8 +7,11 @@ import axios from 'axios';
 export default function Home() {
 
     const [file, setFile] = useState<File | null>(null);
+    const [messageIndex, setMessageIndex] = useState('');
     const [message, setMessage] = useState('');
+    const [messageSearch, setMessageSearch] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
+    const [createIndex, setCreateIndex] = useState('');
     const [searchResults, setSearchResults] = useState([]);
   
     const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -44,10 +47,24 @@ export default function Home() {
       }
     };
 
+    const stopWords = ["de", "a", "o", "e", "do", "da", "em", "um", "para", "com"]; 
+
+    function isStopWord(query: string): boolean {
+      return stopWords.includes(query.toLowerCase());
+    }
+    
     const handleSearch = async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
+
+      setMessageSearch('');
+      
       if (!searchQuery) {
-        setMessage('Por favor, insira uma palavra para pesquisar');
+        setMessageSearch('Por favor, insira uma palavra para pesquisar');
+        return;
+      }
+
+      if (isStopWord(searchQuery)) {
+        setMessageSearch(`A palavra "${searchQuery}" é muito comum e não retornará resultados.`);
         return;
       }
   
@@ -55,7 +72,14 @@ export default function Home() {
         const response = await axios.get('http://localhost:3000/search', {
           params: { q: searchQuery }
         });
-        setSearchResults(response.data.results);
+
+        if (response.data.results.length === 0) {
+          setMessageSearch(`Nenhum resultado encontrado para a busca "${searchQuery}".`);
+        } else {
+          setSearchResults(response.data.results);
+        }
+
+
       } catch (error: any) {
         if (error.response) {
           setMessage(`Erro ao pesquisar: ${error.response.data.error}`);
@@ -66,13 +90,59 @@ export default function Home() {
       }
     };
 
+    const handleIndex = async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      if (!createIndex) {
+        setMessageIndex('Por favor, digite o nome do índice');
+        return;
+      }
+  
+      try {
+        const response = await axios.get('http://localhost:3000/createIndex', {
+          params: { indexName: createIndex }
+        });
+        setMessageIndex('Índice criado com sucesso!!');
+      } catch (error: any) {
+        if (error.response) {
+          setMessageIndex(`Erro ao pesquisar: ${error.response.data.error}`);
+        } else {
+          setMessageIndex(`Erro ao pesquisar: ${error.message}`);
+        }
+        console.error(error);
+      }
+    };
+
 
   return (
     <main className="flex flex-col items-center justify-between p-24">
         <div className='mb-4'>
-          <h1>DIOF - Upload PDF</h1>
+          <h1 className='font-black'>DIOF - Upload PDF</h1>
         </div>
+      
+        <div className="w-full items-center">
+          <h2 className='my-4 font-semibold'>Criar índice</h2>
+          <form onSubmit={handleIndex}>
+            <div className='flex'>
+              <input 
+                type="text" 
+                value={createIndex} 
+                onChange={(e) => setCreateIndex(e.target.value)}
+                className="block w-full text-sm text-slate-500 border border-slate-300 rounded-md py-2 px-4"
+                placeholder="Digite o nome do índice" 
+              />
+              <button type="submit"
+                className='ml-4 px-4 py-2 font-semibold text-sm bg-violet-500 text-white rounded-full shadow-sm'
+              >
+                Criar
+              </button>
+            </div>
+          </form>
+          {messageIndex && <p>{messageIndex}</p>}
+      </div>
+
+
       <div className="w-full items-center">
+        <h2 className='my-4 font-semibold'>Enviar arquivo PDF para indexar</h2>
         <form onSubmit={handleSubmit}>
           <div className='flex'>
             <div>
@@ -104,7 +174,7 @@ export default function Home() {
       </div>
 
       <div className="w-full items-center mt-8">
-        <h2>Pesquisar nos arquivos PDF</h2>
+        <h2 className='font-semibold mb-4'>Pesquisar nos arquivos PDF</h2>
         <form onSubmit={handleSearch}>
           <div className='flex'>
             <input 
@@ -121,7 +191,9 @@ export default function Home() {
             </button>
           </div>
         </form>
+        {messageSearch && <p>{messageSearch}</p>}
         {searchResults.length > 0 && (
+
           <div className="mt-4">
             <h3>Resultados da Pesquisa:</h3>
             <ul>
